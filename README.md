@@ -117,13 +117,17 @@ Filters that are nested deeper than 100 levels are refused. The limit can be cha
 
 ## Tests
 
-The tests run all example filters of the standard and the expressions of its abstract test suite. See [NOTICE](NOTICE) for their licence.
+The tests run all example filters of the standard and the expressions of its abstract test suite, and check the written JSON against the JSON schema of the standard. See [NOTICE](NOTICE) for the licence of this material.
 
 ```bash
 npm test
 npm run lint
 npm run typecheck
 ```
+
+## Releases
+
+A release is published to npm by the workflow `publish.yml` when a GitHub release is created. The tag must be `v` followed by the version in `package.json`. The workflow uses npm trusted publishing, so no token is stored in the repository.
 
 ## Licence
 

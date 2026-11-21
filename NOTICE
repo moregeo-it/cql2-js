@@ -25,6 +25,10 @@ Derived files:
       The example filters of the standard, copied unchanged from
       cql2/standard/schema/examples.
 
+  test/fixtures/ogc/cql2.schema.json
+      The JSON schema of the CQL2 JSON encoding, copied unchanged from
+      cql2/standard/schema/cql2.json.
+
   test/fixtures/ogc/ats-expressions.txt
       Filter expressions of the Abstract Test Suite (Annex A), as collected by
       the cql2-rs project (https://github.com/developmentseed/cql2-rs, MIT
