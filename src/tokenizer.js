@@ -11,6 +11,7 @@ import { IDENTIFIER_PART_PATTERN, IDENTIFIER_START_PATTERN } from './nodes.js';
 
 const WHITESPACE = /[\t\n\v\f\r \u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]/;
 const NUMBER = /(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?/y;
+// Reading \\ as one backslash and keeping a backslash before other characters is our reading: https://github.com/opengeospatial/ogcapi-features/issues/1133
 const CONTROL_ESCAPES = { a: '\x07', b: '\x08', t: '\x09', n: '\x0A', v: '\x0B', f: '\x0C', r: '\x0D' };
 const SYMBOLS = ['<>', '<=', '>=', '(', ')', ',', '=', '<', '>', '+', '-', '*', '/', '%', '^'];
 

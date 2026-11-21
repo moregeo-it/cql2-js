@@ -12,6 +12,7 @@ import {
   CqlString,
   CqlTimestamp,
   createOperator,
+  findTooDeep,
   isIdentifier
 } from './nodes.js';
 import { isRounded, isUnsafeInteger } from './numbers.js';
@@ -130,6 +131,19 @@ function checkCoordinates(coordinates, depth, kind, path) {
 }
 
 /**
+ * @param {any} bbox
+ * @param {Path} path
+ */
+function checkBBox(bbox, path) {
+  const valid = Array.isArray(bbox) && (bbox.length === 4 || bbox.length === 6)
+    && bbox.every(number => typeof number === 'number' && Number.isFinite(number));
+  if (!valid) {
+    throw jsonError(path, 'A bounding box needs an array of 4 or 6 numbers');
+  }
+  bbox.forEach((/** @type {number} */ number, /** @type {number} */ index) => checkInteger(number, [...path, index]));
+}
+
+/**
  * @param {any} value
  * @param {Path} path
  * @param {boolean} [nested]
@@ -137,6 +151,9 @@ function checkCoordinates(coordinates, depth, kind, path) {
 function checkGeometry(value, path, nested = false) {
   if (!GEOMETRY_NAMES.has(value.type)) {
     throw jsonError([...path, 'type'], `Unknown geometry type ${JSON.stringify(value.type)}`);
+  }
+  if ('bbox' in value) {
+    checkBBox(value.bbox, [...path, 'bbox']);
   }
   if (value.type === 'GeometryCollection') {
     if (nested) {
@@ -253,14 +270,8 @@ function parseObject(value, path, depth, parse) {
     return at(new CqlInterval(start, end), path);
   }
   if ('bbox' in value) {
-    const bbox = value.bbox;
-    const valid = Array.isArray(bbox) && (bbox.length === 4 || bbox.length === 6)
-      && bbox.every(number => typeof number === 'number' && Number.isFinite(number));
-    if (!valid) {
-      throw jsonError([...path, 'bbox'], 'A bounding box needs an array of 4 or 6 numbers');
-    }
-    bbox.forEach((/** @type {number} */ number, /** @type {number} */ index) => checkInteger(number, [...path, 'bbox', index]));
-    return at(new CqlBBox(bbox), path);
+    checkBBox(value.bbox, [...path, 'bbox']);
+    return at(new CqlBBox(value.bbox), path);
   }
   if ('type' in value) {
     checkGeometry(value, path);
@@ -336,5 +347,11 @@ export function parseJson(json, options = {}) {
       throw new CqlError('syntax', `The filter is not valid JSON: ${/** @type {Error} */ (error).message}`);
     }
   }
-  return parseNode(value, [], options.maxDepth ?? DEFAULT_MAX_DEPTH);
+  const maxDepth = options.maxDepth ?? DEFAULT_MAX_DEPTH;
+  const node = parseNode(value, [], maxDepth);
+  const deep = findTooDeep(node, maxDepth);
+  if (deep) {
+    throw jsonError(deep.path ?? [], 'The filter is nested too deeply');
+  }
+  return node;
 }

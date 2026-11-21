@@ -57,7 +57,18 @@ test('numbers that cannot be represented exactly are refused', () => {
   assertCqlError(() => parseJson({ op: 's_intersects', args: [{ property: 'g' }, { bbox: [0, 0, 1, 2 ** 60] }] }), /too large.*\/args\/1\/bbox\/3/);
   assertCqlError(() => parseText('a = 9007199254740993.0'), /too large to be represented exactly/);
   assertCqlError(() => parseText('a = 9007199254740993e0'), /too large to be represented exactly/);
-  assertCqlError(() => parseText('a = 1e20'), /too large to be represented exactly/);
+  assertCqlError(() => parseText('a = 999999999999999999999.0'), /too large to be represented exactly/);
+  assertCqlError(() => parseText('a = 999999999999999999999e0'), /too large to be represented exactly/);
+  assertCqlError(() => parseText('a = 9007199254740993e3'), /too large to be represented exactly/);
+  assertCqlError(() => parseJson('{"op":"=","args":[{"property":"a"},999999999999999999999.0]}'), /too large to be represented exactly/);
+  assertCqlError(() => parseJson({ op: 's_intersects', args: [{ property: 'g' }, { type: 'Point', bbox: [0, 0, 2 ** 60, 1], coordinates: [1, 2] }] }), /too large.*\/args\/1\/bbox\/2/);
+  assertCqlError(() => parseJson({ op: 's_intersects', args: [{ property: 'g' }, { type: 'Point', bbox: [0, 0, 1, 'x'], coordinates: [1, 2] }] }), /4 or 6 numbers.*\/args\/1\/bbox/);
+  assertCqlError(() => parseJson({ op: 's_intersects', args: [{ property: 'g' }, { type: 'GeometryCollection', geometries: [{ type: 'Point', bbox: [1], coordinates: [1, 2] }] }] }), /4 or 6 numbers.*\/geometries\/0\/bbox/);
+  for (const text of ['1e20', '100000000000000000000', '9007199254740992', '9007199254740994', '1.5e25', '0.12345678901234567890', '123456789012345000000000']) {
+    const value = parseText(`a = ${text}`).args[1].value;
+    assert.equal(value, Number(text), text);
+    assert.equal(parseText(`a = ${CqlValue.create(value).toText()}`).args[1].value, value, text);
+  }
   assertCqlError(() => parseText('a = 9007199254740993'), /too large to be represented exactly \(line 1, column 5\)/);
   assertCqlError(() => parseText('a = 1e309'), /The number 1e309 is too large/);
   assertCqlError(() => parseText('S_INTERSECTS(g, POINT(1e999 0))'), /too large/);
@@ -71,7 +82,12 @@ test('non-finite numbers cannot be written to JSON either', () => {
   assertCqlError(() => JSON.stringify(CqlValue.create(Infinity)), /Cannot write Infinity/);
   assertCqlError(() => JSON.stringify(new CqlEqual(new CqlProperty('a'), CqlValue.create(NaN))), /Cannot write NaN/);
   assertCqlError(() => JSON.stringify(new CqlBBox([0, 0, Infinity, 1])), /Cannot write Infinity/);
-  assertCqlError(() => JSON.stringify(CqlValue.create(Number.MAX_SAFE_INTEGER + 1)), /too large to be represented exactly/);
+  assertCqlError(() => JSON.stringify(CqlValue.create(2 ** 60)), /too large to be represented exactly/);
+  assertCqlError(() => JSON.stringify(CqlValue.create({ type: 'Point', coordinates: [Infinity, 0] })), /Cannot write Infinity/);
+  assertCqlError(() => JSON.stringify(CqlValue.create({ type: 'LineString', coordinates: [[0, 0], [2 ** 60, 0]] })), /too large/);
+  assertCqlError(() => JSON.stringify(CqlValue.create({ type: 'Point', bbox: [0, 0, NaN, 1], coordinates: [0, 0] })), /Cannot write NaN/);
+  assertCqlError(() => JSON.stringify(CqlValue.create({ type: 'GeometryCollection', geometries: [{ type: 'Point', coordinates: [0, Infinity] }] })), /Cannot write Infinity/);
+  assert.deepEqual(plain(CqlValue.create({ type: 'Point', bbox: [0, 0, 1, 1], coordinates: [0.5, 0.5] })), { type: 'Point', bbox: [0, 0, 1, 1], coordinates: [0.5, 0.5] });
   assertCqlError(() => CqlValue.create(2 ** 60).toText(), /too large to be represented exactly/);
   assertCqlError(() => new CqlBBox([0, 0, 1, 2 ** 60]).toText(), /too large to be represented exactly/);
   for (const value of [Number.MAX_SAFE_INTEGER, 1e21, 1e30, 1.5e300, 0.1]) {
@@ -165,6 +181,11 @@ test('the depth limit applies to the resulting tree, however it is written', () 
   assert.equal(validate(allowed).length, 0);
   assertCqlError(() => parseText(`a = ${sum(100)}`), /nested deeper than 100 levels/);
   assert.ok(parseText(`a = ${sum(150)}`, { maxDepth: 200 }));
+
+  const interval = { op: 't_after', args: [{ property: 'a' }, { interval: ['2020-01-01', '..'] }] };
+  assertCqlError(() => parseJson(interval, { maxDepth: 2 }), /nested too deeply.*\/args\/1\/interval\/0/);
+  assertCqlError(() => parseText(parseJson(interval).toText(), { maxDepth: 2 }), /nested deeper than 2 levels/);
+  assert.deepEqual(plain(parseText(parseJson(interval, { maxDepth: 3 }).toText(), { maxDepth: 3 })), interval);
 
   const long = parseText(Array(5000).fill('a = 1').join(' OR '));
   assert.equal(long.args.length, 5000);

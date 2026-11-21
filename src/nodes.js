@@ -45,6 +45,7 @@ const IDENTIFIER_PATTERN = unicodePattern(`^[${IDENTIFIER_START}][${IDENTIFIER_P
  * @param {string} name
  * @returns {boolean} whether the name can be written without quotes and used as the name of a function
  */
+// The grammar only allows an identifier inside double quotes, we quote any other name anyway: https://github.com/opengeospatial/ogcapi-features/issues/916
 export function isIdentifier(name) {
   return typeof name === 'string' && IDENTIFIER_PATTERN.test(name) && !KEYWORDS.has(name.toLowerCase());
 }
@@ -76,6 +77,7 @@ function wrap(node, minimum) {
   return precedenceOf(node) < minimum ? `(${text})` : text;
 }
 
+// The standard does not define how a backslash itself is written, \\ is our reading: https://github.com/opengeospatial/ogcapi-features/issues/1133
 const ESCAPES = new Map([['\\', '\\\\'], ["'", "''"], ['\x07', '\\a'], ['\x08', '\\b'], ['\x09', '\\t'], ['\x0A', '\\n'], ['\x0B', '\\v'], ['\x0C', '\\f'], ['\x0D', '\\r']]);
 /**
  * @param {string} value
@@ -83,6 +85,21 @@ const ESCAPES = new Map([['\\', '\\\\'], ["'", "''"], ['\x07', '\\a'], ['\x08', 
  */
 function quote(value) {
   return `'${Array.from(value, char => ESCAPES.get(char) ?? char).join('')}'`;
+}
+
+/**
+ * @param {any} value coordinates, a bounding box or a geometry
+ */
+function checkGeometryNumbers(value) {
+  if (typeof value === 'number') {
+    numberToText(value);
+  } else if (Array.isArray(value)) {
+    value.forEach(checkGeometryNumbers);
+  } else if (value !== null && typeof value === 'object') {
+    for (const member of [value.coordinates, value.bbox, value.geometries]) {
+      checkGeometryNumbers(member);
+    }
+  }
 }
 
 export class CqlNode {
@@ -291,6 +308,11 @@ export class CqlGeometry extends CqlValue {
    */
   constructor(value) {
     super(value);
+  }
+
+  toJSON() {
+    checkGeometryNumbers(this.value);
+    return this.value;
   }
 
   toText() {
