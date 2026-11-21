@@ -7,6 +7,8 @@
     "type": "git",
     "url": "git+https://github.com/moregeo-it/cql2-js.git"
   },
+  "homepage": "https://github.com/moregeo-it/cql2-js#readme",
+  "bugs": "https://github.com/moregeo-it/cql2-js/issues",
   "keywords": [
     "cql2",
     "cql",
@@ -28,6 +30,9 @@
     "types",
     "NOTICE"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "sideEffects": false,
   "engines": {
     "node": ">=22"

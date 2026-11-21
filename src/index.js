@@ -20,3 +20,10 @@ export function parse(filter, options = {}) {
 }
 
 export { CONFORMANCE, CONFORMANCE_PREFIX, requiredConformance, schemaToType, validate } from './validate.js';
+
+/** @typedef {import('./errors.js').Span} Span */
+/** @typedef {import('./nodes.js').CqlWritable} CqlWritable */
+/** @typedef {import('./validate.js').CqlType} CqlType */
+/** @typedef {import('./validate.js').FunctionDefinition} FunctionDefinition */
+/** @typedef {import('./validate.js').Problem} Problem */
+/** @typedef {import('./validate.js').ValidateOptions} ValidateOptions */
