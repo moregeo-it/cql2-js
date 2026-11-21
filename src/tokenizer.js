@@ -11,6 +11,7 @@ import { IDENTIFIER_PART_PATTERN, IDENTIFIER_START_PATTERN } from './nodes.js';
 
 const WHITESPACE = /[\t\n\v\f\r \u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]/;
 const NUMBER = /(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?/y;
+const CONTROL_ESCAPES = { a: '\x07', b: '\x08', t: '\x09', n: '\x0A', v: '\x0B', f: '\x0C', r: '\x0D' };
 const SYMBOLS = ['<>', '<=', '>=', '(', ')', ',', '=', '<', '>', '+', '-', '*', '/', '%', '^'];
 
 /**
@@ -36,8 +37,12 @@ function readDelimited(text, start, delimiter, backslash) {
   let i = start + 1;
   while (i < text.length) {
     const char = text[i];
-    if (backslash && char === '\\' && text[i + 1] === delimiter) {
-      value += delimiter;
+    const next = text[i + 1];
+    if (backslash && char === '\\' && (next === delimiter || next === '\\')) {
+      value += next;
+      i += 2;
+    } else if (backslash && char === '\\' && Object.hasOwn(CONTROL_ESCAPES, next)) {
+      value += CONTROL_ESCAPES[/** @type {keyof typeof CONTROL_ESCAPES} */ (next)];
       i += 2;
     } else if (char === delimiter && text[i + 1] === delimiter) {
       value += delimiter;

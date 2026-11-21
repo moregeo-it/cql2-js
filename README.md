@@ -112,8 +112,12 @@ Filters that are nested deeper than 100 levels are refused. The limit can be cha
 - `a NOT LIKE b`, `a NOT BETWEEN b AND c`, `a NOT IN (b)` and `a IS NOT NULL` are read as `not` around the operator, and written back in the short form.
 - Chains of `AND` or `OR` in text become one operator with several arguments.
 - A minus sign in front of a number is part of the number. In front of anything else it is read as a multiplication with `-1`.
-- Parentheses with one element are a group, except in the list of `IN` and in the arguments of the array operators, where they are an array.
+- Parentheses around a whole array element or a whole function argument are an array with one element. Parentheses around a part of it, and everywhere else, are a group.
 - Geometries with measures (`M`) are refused. Positions with three numbers are written with `Z`.
+- Polygon rings must be closed, and lines need at least two positions, in both encodings.
+- Integers beyond the range that JavaScript represents exactly, and numbers that are not finite, are refused instead of being rounded.
+- In strings, the backslash escapes of the standard are read and written. A backslash in front of any other character is kept.
+- A chain of more than 100 arithmetic operators is refused, like deeper nesting. `AND` and `OR` chains have no limit.
 
 ## Tests
 

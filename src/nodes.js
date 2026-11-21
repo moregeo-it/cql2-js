@@ -33,6 +33,14 @@ export const IDENTIFIER_PART_PATTERN = unicodePattern(`[${IDENTIFIER_PART}]`);
 const IDENTIFIER_PATTERN = unicodePattern(`^[${IDENTIFIER_START}][${IDENTIFIER_PART}]*$`);
 
 /**
+ * @param {string} name
+ * @returns {boolean} whether the name can be written without quotes
+ */
+export function isIdentifier(name) {
+  return typeof name === 'string' && IDENTIFIER_PATTERN.test(name) && !RESERVED_WORDS.has(name.toLowerCase());
+}
+
+/**
  * Anything that can be written as CQL2. Objects from other libraries can be used
  * as arguments as long as they implement these two methods.
  *
@@ -59,12 +67,13 @@ function wrap(node, minimum) {
   return precedenceOf(node) < minimum ? `(${text})` : text;
 }
 
+const ESCAPES = new Map([['\\', '\\\\'], ["'", "''"], ['\x07', '\\a'], ['\x08', '\\b'], ['\x09', '\\t'], ['\x0A', '\\n'], ['\x0B', '\\v'], ['\x0C', '\\f'], ['\x0D', '\\r']]);
 /**
  * @param {string} value
  * @returns {string}
  */
 function quote(value) {
-  return `'${value.replaceAll("'", "''")}'`;
+  return `'${Array.from(value, char => ESCAPES.get(char) ?? char).join('')}'`;
 }
 
 export class CqlNode {
@@ -159,6 +168,11 @@ export class CqlNumber extends CqlValue {
    */
   constructor(value) {
     super(value);
+  }
+
+  toJSON() {
+    numberToText(this.value);
+    return this.value;
   }
 
   toText() {
@@ -286,6 +300,7 @@ export class CqlBBox extends CqlValue {
   }
 
   toJSON() {
+    this.value.forEach(numberToText);
     return { bbox: this.value };
   }
 
@@ -329,7 +344,7 @@ export class CqlProperty extends CqlNode {
   }
 
   toText() {
-    if (IDENTIFIER_PATTERN.test(this.name) && !RESERVED_WORDS.has(this.name.toLowerCase())) {
+    if (isIdentifier(this.name)) {
       return this.name;
     }
     return `"${this.name.replaceAll('"', '""')}"`;
@@ -878,6 +893,9 @@ export class CqlArithmeticOperator extends CqlOperator {
   }
 
   toText() {
+    if (!CqlArithmeticOperator.SYMBOLS.includes(this.operator)) {
+      throw new CqlError('invalid-name', `${JSON.stringify(this.operator)} is not an arithmetic operator`);
+    }
     const own = this.precedence;
     const [left, right] = this.args;
     if (this.operator === '^') {
@@ -904,6 +922,9 @@ export class CqlFunction extends CqlOperator {
   }
 
   toText() {
+    if (!isIdentifier(this.operator)) {
+      throw new CqlError('invalid-name', `${JSON.stringify(this.operator)} cannot be written as a function name`);
+    }
     return `${this.operator}(${this.args.map(arg => arg.toText()).join(', ')})`;
   }
 

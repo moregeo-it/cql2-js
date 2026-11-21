@@ -48,6 +48,8 @@ class Parser {
     this.index = 0;
     this.depth = 0;
     this.maxDepth = maxDepth;
+    /** @type {WeakMap<object, number>} */
+    this.groups = new WeakMap();
   }
 
   /** @returns {Token} */
@@ -166,6 +168,32 @@ class Parser {
     }
   }
 
+  /**
+   * @param {Token} token
+   * @returns {number}
+   */
+  number(token) {
+    const value = Number(token.value);
+    if (!Number.isFinite(value)) {
+      throw this.error(token, `The number ${token.value} is too large`);
+    }
+    if (/^[0-9]+$/.test(token.value) && !Number.isSafeInteger(value)) {
+      throw this.error(token, `The integer ${token.value} is too large to be represented exactly`);
+    }
+    return value;
+  }
+
+  /**
+   * Refuses chains of operators that would build a tree deeper than the limit.
+   *
+   * @param {number} length
+   */
+  checkChain(length) {
+    if (length > this.maxDepth) {
+      throw this.error(this.token, `The filter chains more than ${this.maxDepth} arithmetic operators`);
+    }
+  }
+
   /** @returns {any} */
   parse() {
     const node = this.parseExpression();
@@ -273,7 +301,9 @@ class Parser {
   /** @returns {any} */
   parseAdditive() {
     let left = this.parseMultiplicative();
+    let length = 0;
     while (this.isSymbol('+') || this.isSymbol('-')) {
+      this.checkChain(++length);
       const op = this.next().value;
       left = this.at(new CqlArithmeticOperator(op, left, this.parseMultiplicative()), this.startOf(left));
     }
@@ -283,7 +313,9 @@ class Parser {
   /** @returns {any} */
   parseMultiplicative() {
     let left = this.parsePower();
+    let length = 0;
     while (this.isSymbol('*') || this.isSymbol('/') || this.isSymbol('%') || this.isWord('div')) {
+      this.checkChain(++length);
       const op = this.next().value.toLowerCase();
       left = this.at(new CqlArithmeticOperator(op, left, this.parsePower()), this.startOf(left));
     }
@@ -334,7 +366,7 @@ class Parser {
     switch (token.type) {
       case 'number':
         this.next();
-        return this.at(new CqlNumber(Number(token.value)), token);
+        return this.at(new CqlNumber(this.number(token)), token);
       case 'string':
         this.next();
         return this.at(new CqlString(token.value), token);
@@ -361,18 +393,46 @@ class Parser {
       this.next();
       return this.at(new CqlArray([]), start);
     }
+    const firstToken = this.token;
     const first = this.parseExpression();
     if (this.isSymbol(')')) {
       this.next();
+      this.groups.set(first, (this.groups.get(first) ?? 0) + 1);
       return first;
     }
-    const elements = [first];
+    const elements = [this.toElement(first, firstToken)];
     while (this.isSymbol(',')) {
       this.next();
-      elements.push(this.parseExpression());
+      elements.push(this.parseElement());
     }
     this.expectSymbol(')');
     return this.at(new CqlArray(elements), start);
+  }
+
+  /**
+   * Parses an array element or a function argument. Parentheses around the whole of it denote an array,
+   * parentheses around a part of it group as usual.
+   *
+   * @returns {any}
+   */
+  parseElement() {
+    const start = this.token;
+    return this.toElement(this.parseExpression(), start);
+  }
+
+  /**
+   * @param {any} node
+   * @param {Token} start
+   * @returns {any}
+   */
+  toElement(node, start) {
+    const levels = this.groups.get(node) ?? 0;
+    this.groups.delete(node);
+    let element = node;
+    for (let level = 0; level < levels; level++) {
+      element = this.at(new CqlArray([element]), start);
+    }
+    return element;
   }
 
   /** @returns {CqlArray} */
@@ -384,7 +444,7 @@ class Parser {
     const elements = [];
     if (!this.isSymbol(')')) {
       do {
-        elements.push(this.isSymbol('(') ? this.parseArray() : this.parseExpression());
+        elements.push(this.parseElement());
       } while (this.isSymbol(',') && this.next());
     }
     this.expectSymbol(')');
@@ -393,15 +453,15 @@ class Parser {
   }
 
   /**
-   * @param {boolean} [arrayContext]
+   * @param {boolean} [elements] whether parentheses around a whole argument denote an array
    * @returns {any[]}
    */
-  parseArguments(arrayContext = false) {
+  parseArguments(elements = false) {
     this.expectSymbol('(');
     const args = [];
     if (!this.isSymbol(')')) {
       do {
-        args.push(arrayContext && this.isSymbol('(') ? this.parseArray() : this.parseExpression());
+        args.push(elements ? this.parseElement() : this.parseExpression());
       } while (this.isSymbol(',') && this.next());
     }
     this.expectSymbol(')');
@@ -450,8 +510,9 @@ class Parser {
     if (RESERVED_WORDS.has(word)) {
       throw this.error(token, `Unexpected ${token.value.toUpperCase()}`);
     }
-    const args = this.parseArguments(ARRAY_FUNCTIONS.has(word));
-    if (isOperator(word) && /^[sta]_/.test(word)) {
+    const standard = isOperator(word) && /^[sta]_/.test(word);
+    const args = this.parseArguments(!standard || ARRAY_FUNCTIONS.has(word));
+    if (standard) {
       return this.operator(word, args, token);
     }
     return this.at(new CqlFunction(token.value, args), token);
@@ -523,7 +584,7 @@ class Parser {
     if (this.token.type !== 'number') {
       throw this.error(this.token, `Expected a number but found ${this.describe(this.token)}`);
     }
-    return sign * Number(this.next().value);
+    return sign * this.number(this.next());
   }
 
   /**
@@ -573,7 +634,7 @@ class Parser {
       case 'LineString':
         return { type, coordinates: this.parsePositions(2, 'A line') };
       case 'Polygon':
-        return { type, coordinates: this.parseList(() => this.parsePositions(4, 'A polygon ring')) };
+        return { type, coordinates: this.parseList(() => this.parseRing()) };
       case 'MultiPoint':
         return { type, coordinates: this.parseList(() => this.parseMultiPointMember()) };
       case 'MultiLineString':
@@ -581,7 +642,7 @@ class Parser {
       case 'MultiPolygon':
         return {
           type,
-          coordinates: this.parseList(() => this.parseList(() => this.parsePositions(4, 'A polygon ring')))
+          coordinates: this.parseList(() => this.parseList(() => this.parseRing()))
         };
       default:
         return { type, geometries: this.parseList(() => this.parseCollectionMember()) };
@@ -641,6 +702,17 @@ class Parser {
       throw this.error(start, `${name} needs at least ${minimum} positions, got ${positions.length}`);
     }
     return positions;
+  }
+
+  /** @returns {number[][]} */
+  parseRing() {
+    const start = this.token;
+    const ring = this.parsePositions(4, 'A polygon ring');
+    const last = ring[ring.length - 1];
+    if (ring[0].length !== last.length || ring[0].some((value, index) => value !== last[index])) {
+      throw this.error(start, 'A polygon ring must end at the position where it starts');
+    }
+    return ring;
   }
 
   /** @returns {number[]} */
