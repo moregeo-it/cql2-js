@@ -23,8 +23,10 @@ import {
   CqlOr,
   RESERVED_WORDS,
   createOperator,
+  findTooDeep,
   isOperator
 } from './nodes.js';
+import { isRounded } from './numbers.js';
 import { checkDate, checkTimestamp } from './temporal.js';
 import { syntaxError, tokenize } from './tokenizer.js';
 import { GEOMETRY_TYPES } from './wkt.js';
@@ -177,21 +179,10 @@ class Parser {
     if (!Number.isFinite(value)) {
       throw this.error(token, `The number ${token.value} is too large`);
     }
-    if (/^[0-9]+$/.test(token.value) && !Number.isSafeInteger(value)) {
+    if (isRounded(token.value, value)) {
       throw this.error(token, `The integer ${token.value} is too large to be represented exactly`);
     }
     return value;
-  }
-
-  /**
-   * Refuses chains of operators that would build a tree deeper than the limit.
-   *
-   * @param {number} length
-   */
-  checkChain(length) {
-    if (length > this.maxDepth) {
-      throw this.error(this.token, `The filter chains more than ${this.maxDepth} arithmetic operators`);
-    }
   }
 
   /** @returns {any} */
@@ -199,6 +190,10 @@ class Parser {
     const node = this.parseExpression();
     if (this.token.type !== 'end') {
       throw this.error(this.token, `Unexpected ${this.describe(this.token)}`);
+    }
+    const deep = findTooDeep(node, this.maxDepth);
+    if (deep) {
+      throw syntaxError(this.text, deep.span?.start ?? 0, `The filter is nested deeper than ${this.maxDepth} levels`);
     }
     return node;
   }
@@ -305,9 +300,7 @@ class Parser {
   /** @returns {any} */
   parseAdditive() {
     let left = this.parseMultiplicative();
-    let length = 0;
     while (this.isSymbol('+') || this.isSymbol('-')) {
-      this.checkChain(++length);
       const op = this.next().value;
       left = this.at(new CqlArithmeticOperator(op, left, this.parseMultiplicative()), this.startOf(left));
     }
@@ -317,9 +310,7 @@ class Parser {
   /** @returns {any} */
   parseMultiplicative() {
     let left = this.parsePower();
-    let length = 0;
     while (this.isSymbol('*') || this.isSymbol('/') || this.isSymbol('%') || this.isWord('div')) {
-      this.checkChain(++length);
       const op = this.next().value.toLowerCase();
       left = this.at(new CqlArithmeticOperator(op, left, this.parsePower()), this.startOf(left));
     }
@@ -353,6 +344,7 @@ class Parser {
     const operand = this.parseUnary();
     this.depth--;
     if (sign.value === '+') {
+      this.groups.delete(operand);
       return operand;
     }
     if (operand instanceof CqlNumber) {

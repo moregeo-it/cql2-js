@@ -49,7 +49,15 @@ test('a GeoJSON geometry with a bbox member stays a geometry', () => {
 });
 
 test('numbers that cannot be represented exactly are refused', () => {
-  assertCqlError(() => parseJson('{"op":"=","args":[{"property":"a"},9007199254740993]}'), /too large to be represented exactly.*\/args\/1/);
+  assertCqlError(() => parseJson('{"op":"=","args":[{"property":"a"},9007199254740993]}'), /The integer 9007199254740993 is too large to be represented exactly/);
+  assertCqlError(() => parseJson('{"op":"=","args":[{"property":"a"},9007199254740993123456789]}'), /The integer 9007199254740993123456789 is too large/);
+  assertCqlError(() => parseJson({ op: '=', args: [{ property: 'a' }, 2 ** 60] }), /too large to be represented exactly.*\/args\/1/);
+  assertCqlError(() => parseJson('{"op":"s_intersects","args":[{"property":"g"},{"type":"Point","coordinates":[9007199254740993,0]}]}'), /too large/);
+  assertCqlError(() => parseJson({ op: 's_intersects', args: [{ property: 'g' }, { type: 'Point', coordinates: [2 ** 60, 0] }] }), /too large.*\/args\/1\/coordinates\/0/);
+  assertCqlError(() => parseJson({ op: 's_intersects', args: [{ property: 'g' }, { bbox: [0, 0, 1, 2 ** 60] }] }), /too large.*\/args\/1\/bbox\/3/);
+  assertCqlError(() => parseText('a = 9007199254740993.0'), /too large to be represented exactly/);
+  assertCqlError(() => parseText('a = 9007199254740993e0'), /too large to be represented exactly/);
+  assertCqlError(() => parseText('a = 1e20'), /too large to be represented exactly/);
   assertCqlError(() => parseText('a = 9007199254740993'), /too large to be represented exactly \(line 1, column 5\)/);
   assertCqlError(() => parseText('a = 1e309'), /The number 1e309 is too large/);
   assertCqlError(() => parseText('S_INTERSECTS(g, POINT(1e999 0))'), /too large/);
@@ -63,6 +71,14 @@ test('non-finite numbers cannot be written to JSON either', () => {
   assertCqlError(() => JSON.stringify(CqlValue.create(Infinity)), /Cannot write Infinity/);
   assertCqlError(() => JSON.stringify(new CqlEqual(new CqlProperty('a'), CqlValue.create(NaN))), /Cannot write NaN/);
   assertCqlError(() => JSON.stringify(new CqlBBox([0, 0, Infinity, 1])), /Cannot write Infinity/);
+  assertCqlError(() => JSON.stringify(CqlValue.create(Number.MAX_SAFE_INTEGER + 1)), /too large to be represented exactly/);
+  assertCqlError(() => CqlValue.create(2 ** 60).toText(), /too large to be represented exactly/);
+  assertCqlError(() => new CqlBBox([0, 0, 1, 2 ** 60]).toText(), /too large to be represented exactly/);
+  for (const value of [Number.MAX_SAFE_INTEGER, 1e21, 1e30, 1.5e300, 0.1]) {
+    const text = CqlValue.create(value).toText();
+    assert.equal(parseText(`a = ${text}`).args[1].value, value, text);
+    assert.equal(parseJson(JSON.stringify({ op: '=', args: [{ property: 'a' }, value] })).args[1].value, value, text);
+  }
 });
 
 test('names that are not identifiers cannot become function names or operators', () => {
@@ -70,6 +86,10 @@ test('names that are not identifiers cannot become function names or operators',
   assertCqlError(() => parseJson({ op: 'like(', args: [] }), /valid function name/);
   assertCqlError(() => new CqlFunction('f() OR g', []).toText(), /cannot be written as a function name/);
   assertCqlError(() => new CqlFunction('not', []).toText(), /cannot be written as a function name/);
+  for (const name of ['date', 'timestamp', 'interval', 'point', 'bbox', 'Polygon']) {
+    assertCqlError(() => parseJson({ op: '=', args: [{ op: name, args: ['2020-01-01'] }, 1] }), /neither an operator nor a valid function name/);
+    assertCqlError(() => new CqlFunction(name, []).toText(), /cannot be written as a function name/);
+  }
   assertCqlError(() => new CqlArithmeticOperator('+ 1 OR TRUE OR 1 +', CqlValue.create(1), CqlValue.create(2)).toText(), /not an arithmetic operator/);
   assert.equal(parseJson({ op: 'my:func.v2', args: [1] }).toText(), 'my:func.v2(1)');
 });
@@ -131,16 +151,31 @@ test('arrays with one element survive a round trip as function arguments', () =>
   assert.deepEqual(plain(parseText('(a) = (1)')), { op: '=', args: [{ property: 'a' }, 1] });
 });
 
-test('long chains of arithmetic operators are refused instead of overflowing the stack', () => {
-  assertCqlError(() => parseText(`a = ${Array(200000).fill('1').join(' + ')}`), /chains more than 100 arithmetic operators/);
-  assertCqlError(() => parseText(`a = ${Array(200000).fill('1').join(' * ')}`), /chains more than 100 arithmetic operators/);
-  const allowed = parseText(`a = ${Array(100).fill('1').join(' + ')}`);
-  assert.equal(parseText(allowed.toText()).toText(), allowed.toText());
+test('the depth limit applies to the resulting tree, however it is written', () => {
+  const sum = (/** @type {number} */ terms) => Array(terms).fill('1').join(' + ');
+  assertCqlError(() => parseText(`a = ${sum(200000)}`), /nested deeper than 100 levels/);
+  assertCqlError(() => parseText(`a = ${Array(200000).fill('1').join(' * ')}`), /nested deeper than 100 levels/);
+  assertCqlError(() => parseText(`a = (${sum(99)}) + 1`), /nested deeper than 100 levels/);
+  assertCqlError(() => parseText(`a = ((${sum(50)}) + ${sum(50)}) + 1`), /nested deeper than 100 levels/);
+
+  const allowed = parseText(`a = (${sum(50)}) + ${sum(49)}`);
+  assert.equal(allowed.toText(), `a = ${sum(99)}`);
+  assert.deepEqual(plain(parseText(allowed.toText())), plain(allowed));
+  assert.deepEqual(plain(parseJson(plain(allowed))), plain(allowed));
   assert.equal(validate(allowed).length, 0);
-  assert.ok(parseText(`a = ${Array(150).fill('1').join(' + ')}`, { maxDepth: 200 }));
+  assertCqlError(() => parseText(`a = ${sum(100)}`), /nested deeper than 100 levels/);
+  assert.ok(parseText(`a = ${sum(150)}`, { maxDepth: 200 }));
+
   const long = parseText(Array(5000).fill('a = 1').join(' OR '));
   assert.equal(long.args.length, 5000);
   assert.equal(validate(long).length, 0);
+});
+
+test('a plus sign in front of a group does not turn it into an array', () => {
+  assert.deepEqual(plain(parseText('f(+(1)) = 1')).args[0].args, [1]);
+  assert.deepEqual(plain(parseText('f((+(1))) = 1')).args[0].args, [[1]]);
+  assert.deepEqual(plain(parseText('f(-(1)) = 1')).args[0].args, [-1]);
+  assert.deepEqual(plain(parseText('A_CONTAINS(t, (+(1), (2)))')).args[1], [1, [2]]);
 });
 
 test('nested IN lists are validated in linear time', () => {

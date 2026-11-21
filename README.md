@@ -103,7 +103,7 @@ try {
 
 For JSON input the error has a `path`, for example `['args', 1, 'date']`.
 
-Filters that are nested deeper than 100 levels are refused. The limit can be changed with the `maxDepth` option of the parsers.
+Filters whose tree is deeper than 100 levels are refused. The limit can be changed with the `maxDepth` option of the parsers.
 
 ## Decisions where the standard leaves room
 
@@ -117,9 +117,10 @@ Filters that are nested deeper than 100 levels are refused. The limit can be cha
 - Property names that are keywords of the standard, such as `date`, are written in double quotes. They are read with and without quotes where the meaning is clear.
 - An `IN` list without values is refused in text, as in the grammar. In JSON it is accepted, as in the schema.
 - Polygon rings must be closed, and lines need at least two positions, in both encodings.
-- Integers beyond the range that JavaScript represents exactly, and numbers that are not finite, are refused instead of being rounded.
+- Integers beyond the range that JavaScript represents exactly, and numbers that are not finite, are refused instead of being rounded, when reading and when writing. From `1e21` on, numbers in exponent notation are accepted as approximate values.
 - In strings, the backslash escapes of the standard are read and written. A backslash in front of any other character is kept.
-- A chain of more than 100 arithmetic operators is refused, like deeper nesting. `AND` and `OR` chains have no limit.
+- The depth limit applies to the resulting tree, so a chain of about 100 arithmetic operators is refused like deeper nesting. `AND` and `OR` chains are flat and have no limit.
+- Functions cannot be named like a keyword of the standard, such as `date` or `point`, because their call could not be told apart in text.
 
 ## Tests
 

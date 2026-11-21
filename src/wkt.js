@@ -1,4 +1,5 @@
 import { CqlError } from './errors.js';
+import { isUnsafeInteger } from './numbers.js';
 
 /**
  * @typedef {object} Geometry
@@ -24,6 +25,9 @@ export const GEOMETRY_TYPES = {
 export function numberToText(value) {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
     throw new CqlError('invalid-number', `Cannot write ${value} as a number`);
+  }
+  if (isUnsafeInteger(value)) {
+    throw new CqlError('invalid-number', `Cannot write the integer ${value}, it is too large to be represented exactly`);
   }
   return String(value);
 }

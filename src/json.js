@@ -14,6 +14,7 @@ import {
   createOperator,
   isIdentifier
 } from './nodes.js';
+import { isRounded, isUnsafeInteger } from './numbers.js';
 import { checkDate, checkTimestamp } from './temporal.js';
 import { GEOMETRY_TYPES } from './wkt.js';
 
@@ -63,6 +64,16 @@ function at(node, path) {
 }
 
 /**
+ * @param {number} value
+ * @param {Path} path
+ */
+function checkInteger(value, path) {
+  if (isUnsafeInteger(value)) {
+    throw jsonError(path, `The integer ${value} is too large to be represented exactly`);
+  }
+}
+
+/**
  * @param {any} position
  * @param {Path} path
  */
@@ -72,6 +83,7 @@ function checkPosition(position, path) {
   if (!valid) {
     throw jsonError(path, 'A position needs 2 or 3 numbers');
   }
+  position.forEach((/** @type {number} */ number, /** @type {number} */ index) => checkInteger(number, [...path, index]));
 }
 
 /**
@@ -247,6 +259,7 @@ function parseObject(value, path, depth, parse) {
     if (!valid) {
       throw jsonError([...path, 'bbox'], 'A bounding box needs an array of 4 or 6 numbers');
     }
+    bbox.forEach((/** @type {number} */ number, /** @type {number} */ index) => checkInteger(number, [...path, 'bbox', index]));
     return at(new CqlBBox(bbox), path);
   }
   if ('type' in value) {
@@ -275,9 +288,7 @@ function parseNode(value, path, depth) {
       if (!Number.isFinite(value)) {
         throw jsonError(path, 'A number must be finite');
       }
-      if (Number.isInteger(value) && !Number.isSafeInteger(value) && Math.abs(value) < 1e21) {
-        throw jsonError(path, `The integer ${value} is too large to be represented exactly`);
-      }
+      checkInteger(value, path);
       return at(new CqlNumber(value), path);
     case 'object':
       if (Array.isArray(value)) {
@@ -288,6 +299,21 @@ function parseNode(value, path, depth) {
       }
   }
   throw jsonError(path, `Unexpected ${describe(value)}`);
+}
+
+/**
+ * Refuses integers that JSON.parse has rounded, where the runtime reports the text of a number.
+ *
+ * @param {string} key
+ * @param {any} value
+ * @param {{ source?: string }} [context]
+ * @returns {any}
+ */
+function checkLiteral(key, value, context) {
+  if (typeof value === 'number' && typeof context?.source === 'string' && isRounded(context.source, value)) {
+    throw new CqlError('syntax', `The integer ${context.source} is too large to be represented exactly`);
+  }
+  return value;
 }
 
 /**
@@ -302,8 +328,11 @@ export function parseJson(json, options = {}) {
   let value = json;
   if (typeof json === 'string') {
     try {
-      value = JSON.parse(json);
+      value = JSON.parse(json, checkLiteral);
     } catch (error) {
+      if (error instanceof CqlError) {
+        throw error;
+      }
       throw new CqlError('syntax', `The filter is not valid JSON: ${/** @type {Error} */ (error).message}`);
     }
   }

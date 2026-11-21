@@ -43,10 +43,10 @@ const IDENTIFIER_PATTERN = unicodePattern(`^[${IDENTIFIER_START}][${IDENTIFIER_P
 
 /**
  * @param {string} name
- * @returns {boolean} whether the name can be written without quotes
+ * @returns {boolean} whether the name can be written without quotes and used as the name of a function
  */
 export function isIdentifier(name) {
-  return typeof name === 'string' && IDENTIFIER_PATTERN.test(name) && !RESERVED_WORDS.has(name.toLowerCase());
+  return typeof name === 'string' && IDENTIFIER_PATTERN.test(name) && !KEYWORDS.has(name.toLowerCase());
 }
 
 /**
@@ -353,7 +353,7 @@ export class CqlProperty extends CqlNode {
   }
 
   toText() {
-    if (IDENTIFIER_PATTERN.test(this.name) && !KEYWORDS.has(this.name.toLowerCase())) {
+    if (isIdentifier(this.name)) {
       return this.name;
     }
     return `"${this.name.replaceAll('"', '""')}"`;
@@ -940,6 +940,36 @@ export class CqlFunction extends CqlOperator {
     return `${this.operator}(${this.args.map(arg => arg.toText()).join(', ')})`;
   }
 
+}
+
+/**
+ * Finds a node that lies deeper in the tree than the limit, without recursion.
+ *
+ * @param {any} root
+ * @param {number} limit
+ * @returns {any} the node, or null if the tree is within the limit
+ */
+export function findTooDeep(root, limit) {
+  /** @type {Array<[any, number]>} */
+  const stack = [[root, 1]];
+  while (stack.length > 0) {
+    const [node, depth] = /** @type {[any, number]} */ (stack.pop());
+    if (depth > limit) {
+      return node;
+    }
+    let children = [];
+    if (Array.isArray(node?.args)) {
+      children = node.args;
+    } else if (node instanceof CqlArray) {
+      children = node.value;
+    }
+    for (const child of children) {
+      if (child !== null && typeof child === 'object') {
+        stack.push([child, depth + 1]);
+      }
+    }
+  }
+  return null;
 }
 
 /** @type {Map<string, { symbol: string, arity: number | null, create: (args: any[]) => CqlOperator }>} */
