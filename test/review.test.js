@@ -166,3 +166,21 @@ test('queryables with several types are not checked for their type', () => {
   assert.deepEqual(validate(parseText('p = 1'), { queryables }), []);
   assert.deepEqual(validate(parseText("p = 'x'"), { queryables }), []);
 });
+
+test('property names that are keywords are quoted', () => {
+  for (const name of ['date', 'timestamp', 'point', 'bbox', 'interval', 'casei', 'not', 'DATE', 't_after', 'my-prop', 'my prop', '1abc']) {
+    const filter = new CqlEqual(new CqlProperty(name), CqlValue.create(1));
+    assert.equal(filter.toText(), `"${name}" = 1`);
+    assert.equal(parseText(filter.toText()).args[0].name, name);
+  }
+  assert.equal(new CqlEqual(new CqlProperty('eo:cloud_cover'), CqlValue.create(1)).toText(), 'eo:cloud_cover = 1');
+  assert.equal(parseText('date = 1').args[0].name, 'date');
+});
+
+test('an IN list without values is refused in text and accepted in JSON', () => {
+  assertCqlError(() => parseText('a IN ()'), /The list of IN needs at least one value \(line 1, column 6\)/);
+  assertCqlError(() => parseText('a NOT IN ()'), /at least one value/);
+  const filter = parseJson({ op: 'in', args: [{ property: 'a' }, []] });
+  assert.deepEqual(plain(filter), { op: 'in', args: [{ property: 'a' }, []] });
+  assertCqlError(() => filter.toText(), /cannot be written as text/);
+});

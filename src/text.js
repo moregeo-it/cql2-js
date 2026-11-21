@@ -291,7 +291,11 @@ class Parser {
       if (!this.isSymbol('(')) {
         throw this.error(this.token, `Expected a list in parentheses after IN but found ${this.describe(this.token)}`);
       }
+      const list = this.token;
       node = this.at(new CqlIn(left, this.parseArray()), start);
+      if (node.args[1].value.length === 0) {
+        throw this.error(list, 'The list of IN needs at least one value');
+      }
     } else {
       return left;
     }
