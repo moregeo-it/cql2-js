@@ -1,0 +1,50 @@
+{
+  "name": "@moregeo-it/cql2",
+  "version": "0.1.0",
+  "description": "Parse, validate and write OGC CQL2 filters in the text and JSON encodings",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/moregeo-it/cql2-js.git"
+  },
+  "keywords": [
+    "cql2",
+    "cql",
+    "ogc",
+    "stac",
+    "filter",
+    "parser"
+  ],
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./types/index.d.ts",
+      "default": "./src/index.js"
+    }
+  },
+  "types": "./types/index.d.ts",
+  "files": [
+    "src",
+    "types",
+    "NOTICE"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "lint:fix": "eslint --fix .",
+    "typecheck": "tsc",
+    "types": "tsc -p tsconfig.build.json",
+    "test": "node --test",
+    "prepack": "npm run types"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.6.6",
+    "eslint": "^10.15.0",
+    "globals": "^17.14.0",
+    "typescript": "^7.0.2"
+  }
+}
