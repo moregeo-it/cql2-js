@@ -98,9 +98,13 @@ export function schemaToType(schema) {
   if (format.startsWith('geometry') || reference.includes('geojson') || reference.includes('geometry')) {
     return 'geometry';
   }
-  const types = Array.isArray(schema.type) ? schema.type : [schema.type];
-  const type = types.find((/** @type {any} */ candidate) => candidate !== 'null');
-  switch (type) {
+  const types = (Array.isArray(schema.type) ? schema.type : [schema.type])
+    .filter((/** @type {any} */ candidate) => candidate !== 'null');
+  const numeric = types.every((/** @type {any} */ candidate) => candidate === 'number' || candidate === 'integer');
+  if (types.length > 1 && !numeric) {
+    return null;
+  }
+  switch (types[0]) {
     case 'string':
       if (format === 'date-time') {
         return 'timestamp';
@@ -202,6 +206,8 @@ class Validator {
     this.problems = [];
     /** @type {Set<string>} */
     this.required = new Set();
+    /** @type {Map<any, CqlType | null>} */
+    this.types = new Map();
     this.supported = options.conformance ? expandConformance(options.conformance) : null;
   }
 
@@ -342,7 +348,7 @@ class Validator {
       this.expect(left, types[0], SCALARS, 'The left side of IN');
       const items = right instanceof CqlArray ? right.value : [];
       for (const item of items) {
-        const type = this.typeOf(item);
+        const type = this.types.get(item) ?? null;
         if (this.expect(item, type, SCALARS, 'A value in the list of IN') && types[0] && type) {
           this.compatible(item, types[0], type, 'A value in the list of IN');
         }
@@ -396,17 +402,6 @@ class Validator {
   }
 
   /**
-   * Returns the type of a node without reporting anything.
-   *
-   * @param {any} node
-   * @returns {CqlType | null}
-   */
-  typeOf(node) {
-    const silent = new Validator({ ...this.options, conformance: undefined, additionalProperties: true });
-    return silent.visit(node);
-  }
-
-  /**
    * @param {any} node
    * @returns {CqlType | null}
    */
@@ -424,7 +419,7 @@ class Validator {
     } else if (node instanceof CqlGeometry || node instanceof CqlBBox) {
       return 'geometry';
     } else if (node instanceof CqlArray) {
-      node.value.forEach((/** @type {any} */ element) => this.visit(element));
+      node.value.forEach((/** @type {any} */ element) => this.types.set(element, this.visit(element)));
       return 'array';
     } else if (node instanceof CqlInterval) {
       this.need(node, CONFORMANCE.temporal, 'An interval');

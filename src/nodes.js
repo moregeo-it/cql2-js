@@ -16,6 +16,15 @@ export const RESERVED_WORDS = new Set([
   'and', 'or', 'not', 'like', 'between', 'in', 'is', 'null', 'true', 'false', 'div'
 ]);
 
+export const KEYWORDS = new Set([
+  'a_equals', 'a_contains', 'a_containedby', 'a_overlaps', 'accenti', 'and', 'bbox', 'between', 'casei', 'date',
+  'div', 'false', 'geometrycollection', 'in', 'is', 'like', 'linestring', 'multilinestring', 'multipoint',
+  'multipolygon', 'not', 'null', 'or', 'point', 'polygon', 's_intersects', 's_equals', 's_disjoint', 's_touches',
+  's_within', 's_overlaps', 's_crosses', 's_contains', 't_after', 't_before', 't_contains', 't_disjoint', 't_during',
+  't_equals', 't_finishedby', 't_finishes', 't_intersects', 't_meets', 't_metby', 't_overlappedby', 't_overlaps',
+  't_startedby', 't_starts', 'timestamp', 'true', 'interval'
+]);
+
 const IDENTIFIER_START = ':_A-Za-z\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u02FF\\u0370-\\u037D\\u037F-\\u1FFE'
   + '\\u200C-\\u200D\\u2070-\\u218F\\u2C00-\\u2FEF\\u3001-\\uD7FF\\uF900-\\uFDCF\\uFDF0-\\uFFFD\\u{10000}-\\u{EFFFF}';
 const IDENTIFIER_PART = `${IDENTIFIER_START}.0-9\\u0300-\\u036F\\u203F-\\u2040`;
@@ -31,6 +40,15 @@ function unicodePattern(source) {
 export const IDENTIFIER_START_PATTERN = unicodePattern(`[${IDENTIFIER_START}]`);
 export const IDENTIFIER_PART_PATTERN = unicodePattern(`[${IDENTIFIER_PART}]`);
 const IDENTIFIER_PATTERN = unicodePattern(`^[${IDENTIFIER_START}][${IDENTIFIER_PART}]*$`);
+
+/**
+ * @param {string} name
+ * @returns {boolean} whether the name can be written without quotes and used as the name of a function
+ */
+// The grammar only allows an identifier inside double quotes, we quote any other name anyway: https://github.com/opengeospatial/ogcapi-features/issues/916
+export function isIdentifier(name) {
+  return typeof name === 'string' && IDENTIFIER_PATTERN.test(name) && !KEYWORDS.has(name.toLowerCase());
+}
 
 /**
  * Anything that can be written as CQL2. Objects from other libraries can be used
@@ -59,12 +77,29 @@ function wrap(node, minimum) {
   return precedenceOf(node) < minimum ? `(${text})` : text;
 }
 
+// The standard does not define how a backslash itself is written, \\ is our reading: https://github.com/opengeospatial/ogcapi-features/issues/1133
+const ESCAPES = new Map([['\\', '\\\\'], ["'", "''"], ['\x07', '\\a'], ['\x08', '\\b'], ['\x09', '\\t'], ['\x0A', '\\n'], ['\x0B', '\\v'], ['\x0C', '\\f'], ['\x0D', '\\r']]);
 /**
  * @param {string} value
  * @returns {string}
  */
 function quote(value) {
-  return `'${value.replaceAll("'", "''")}'`;
+  return `'${Array.from(value, char => ESCAPES.get(char) ?? char).join('')}'`;
+}
+
+/**
+ * @param {any} value coordinates, a bounding box or a geometry
+ */
+function checkGeometryNumbers(value) {
+  if (typeof value === 'number') {
+    numberToText(value);
+  } else if (Array.isArray(value)) {
+    value.forEach(checkGeometryNumbers);
+  } else if (value !== null && typeof value === 'object') {
+    for (const member of [value.coordinates, value.bbox, value.geometries]) {
+      checkGeometryNumbers(member);
+    }
+  }
 }
 
 export class CqlNode {
@@ -159,6 +194,11 @@ export class CqlNumber extends CqlValue {
    */
   constructor(value) {
     super(value);
+  }
+
+  toJSON() {
+    numberToText(this.value);
+    return this.value;
   }
 
   toText() {
@@ -270,6 +310,11 @@ export class CqlGeometry extends CqlValue {
     super(value);
   }
 
+  toJSON() {
+    checkGeometryNumbers(this.value);
+    return this.value;
+  }
+
   toText() {
     return geometryToWkt(this.value);
   }
@@ -286,6 +331,7 @@ export class CqlBBox extends CqlValue {
   }
 
   toJSON() {
+    this.value.forEach(numberToText);
     return { bbox: this.value };
   }
 
@@ -329,7 +375,7 @@ export class CqlProperty extends CqlNode {
   }
 
   toText() {
-    if (IDENTIFIER_PATTERN.test(this.name) && !RESERVED_WORDS.has(this.name.toLowerCase())) {
+    if (isIdentifier(this.name)) {
       return this.name;
     }
     return `"${this.name.replaceAll('"', '""')}"`;
@@ -673,6 +719,9 @@ export class CqlIn extends CqlComparisonOperator {
    */
   toText(negated = false) {
     const [value, list] = this.args;
+    if (list instanceof CqlArray && list.value.length === 0) {
+      throw new CqlError('empty-list', 'A list of IN without values cannot be written as text');
+    }
     return `${wrap(value, PRECEDENCE.additive)} ${negated ? 'NOT IN' : 'IN'} ${list.toText()}`;
   }
 
@@ -878,6 +927,9 @@ export class CqlArithmeticOperator extends CqlOperator {
   }
 
   toText() {
+    if (!CqlArithmeticOperator.SYMBOLS.includes(this.operator)) {
+      throw new CqlError('invalid-name', `${JSON.stringify(this.operator)} is not an arithmetic operator`);
+    }
     const own = this.precedence;
     const [left, right] = this.args;
     if (this.operator === '^') {
@@ -904,9 +956,42 @@ export class CqlFunction extends CqlOperator {
   }
 
   toText() {
+    if (!isIdentifier(this.operator)) {
+      throw new CqlError('invalid-name', `${JSON.stringify(this.operator)} cannot be written as a function name`);
+    }
     return `${this.operator}(${this.args.map(arg => arg.toText()).join(', ')})`;
   }
 
+}
+
+/**
+ * Finds a node that lies deeper in the tree than the limit, without recursion.
+ *
+ * @param {any} root
+ * @param {number} limit
+ * @returns {any} the node, or null if the tree is within the limit
+ */
+export function findTooDeep(root, limit) {
+  /** @type {Array<[any, number]>} */
+  const stack = [[root, 1]];
+  while (stack.length > 0) {
+    const [node, depth] = /** @type {[any, number]} */ (stack.pop());
+    if (depth > limit) {
+      return node;
+    }
+    let children = [];
+    if (Array.isArray(node?.args)) {
+      children = node.args;
+    } else if (node instanceof CqlArray) {
+      children = node.value;
+    }
+    for (const child of children) {
+      if (child !== null && typeof child === 'object') {
+        stack.push([child, depth + 1]);
+      }
+    }
+  }
+  return null;
 }
 
 /** @type {Map<string, { symbol: string, arity: number | null, create: (args: any[]) => CqlOperator }>} */

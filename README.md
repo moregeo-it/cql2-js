@@ -103,7 +103,7 @@ try {
 
 For JSON input the error has a `path`, for example `['args', 1, 'date']`.
 
-Filters that are nested deeper than 100 levels are refused. The limit can be changed with the `maxDepth` option of the parsers.
+Filters whose tree is deeper than 100 levels are refused. The limit can be changed with the `maxDepth` option of the parsers.
 
 ## Decisions where the standard leaves room
 
@@ -112,8 +112,16 @@ Filters that are nested deeper than 100 levels are refused. The limit can be cha
 - `a NOT LIKE b`, `a NOT BETWEEN b AND c`, `a NOT IN (b)` and `a IS NOT NULL` are read as `not` around the operator, and written back in the short form.
 - Chains of `AND` or `OR` in text become one operator with several arguments.
 - A minus sign in front of a number is part of the number. In front of anything else it is read as a multiplication with `-1`.
-- Parentheses with one element are a group, except in the list of `IN` and in the arguments of the array operators, where they are an array.
+- Parentheses around a whole array element or a whole function argument are an array with one element. Parentheses around a part of it, and everywhere else, are a group.
 - Geometries with measures (`M`) are refused. Positions with three numbers are written with `Z`.
+- Property names that are not identifiers, such as `my-prop`, are written in double quotes, although the grammar only allows identifiers inside the quotes, see [ogcapi-features#916](https://github.com/opengeospatial/ogcapi-features/issues/916).
+- Property names that are keywords of the standard, such as `date`, are written in double quotes. They are read with and without quotes where the meaning is clear.
+- An `IN` list without values is refused in text, as in the grammar. In JSON it is accepted, as in the schema.
+- Polygon rings must be closed, and lines need at least two positions, in both encodings.
+- Integers written with more digits than JavaScript keeps, and numbers that are not finite, are refused instead of being rounded, when reading and when writing, including coordinates and bounding boxes. Numbers with up to 15 significant digits, such as `1e30`, are approximate by notation and accepted.
+- In strings, the backslash escapes of the standard are read and written. A backslash itself is written as `\\`, and a backslash in front of any other character is kept. The standard does not define this, see [ogcapi-features#1133](https://github.com/opengeospatial/ogcapi-features/issues/1133).
+- The depth limit applies to the resulting tree, so a chain of about 100 arithmetic operators is refused like deeper nesting. `AND` and `OR` chains are flat and have no limit.
+- Functions cannot be named like a keyword of the standard, such as `date` or `point`, because their call could not be told apart in text.
 
 ## Tests
 

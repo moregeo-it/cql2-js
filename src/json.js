@@ -11,21 +11,25 @@ import {
   CqlProperty,
   CqlString,
   CqlTimestamp,
-  createOperator
+  createOperator,
+  findTooDeep,
+  isIdentifier
 } from './nodes.js';
+import { isRounded, isUnsafeInteger } from './numbers.js';
 import { checkDate, checkTimestamp } from './temporal.js';
 import { GEOMETRY_TYPES } from './wkt.js';
 
 /** @typedef {Array<string | number>} Path */
 
 const GEOMETRY_NAMES = new Set(Object.values(GEOMETRY_TYPES));
-const COORDINATE_DEPTH = {
-  Point: 0,
-  LineString: 1,
-  MultiPoint: 1,
-  Polygon: 2,
-  MultiLineString: 2,
-  MultiPolygon: 3
+/** @type {Record<string, { depth: number, kind: 'point' | 'line' | 'ring' }>} */
+const COORDINATES = {
+  Point: { depth: 0, kind: 'point' },
+  MultiPoint: { depth: 1, kind: 'point' },
+  LineString: { depth: 0, kind: 'line' },
+  MultiLineString: { depth: 1, kind: 'line' },
+  Polygon: { depth: 1, kind: 'ring' },
+  MultiPolygon: { depth: 2, kind: 'ring' }
 };
 const DEFAULT_MAX_DEPTH = 100;
 
@@ -61,23 +65,82 @@ function at(node, path) {
 }
 
 /**
- * @param {any} coordinates
- * @param {number} depth
+ * @param {number} value
  * @param {Path} path
  */
-function checkCoordinates(coordinates, depth, path) {
-  if (!Array.isArray(coordinates)) {
-    throw jsonError(path, `Expected an array of coordinates but found ${describe(coordinates)}`);
+function checkInteger(value, path) {
+  if (isUnsafeInteger(value)) {
+    throw jsonError(path, `The integer ${value} is too large to be represented exactly`);
   }
-  if (depth > 0) {
-    coordinates.forEach((member, index) => checkCoordinates(member, depth - 1, [...path, index]));
-    return;
-  }
-  const valid = coordinates.length >= 2 && coordinates.length <= 3
-    && coordinates.every(number => typeof number === 'number' && Number.isFinite(number));
-  if (!valid && coordinates.length > 0) {
+}
+
+/**
+ * @param {any} position
+ * @param {Path} path
+ */
+function checkPosition(position, path) {
+  const valid = Array.isArray(position) && position.length >= 2 && position.length <= 3
+    && position.every(number => typeof number === 'number' && Number.isFinite(number));
+  if (!valid) {
     throw jsonError(path, 'A position needs 2 or 3 numbers');
   }
+  position.forEach((/** @type {number} */ number, /** @type {number} */ index) => checkInteger(number, [...path, index]));
+}
+
+/**
+ * @param {any} positions
+ * @param {'line' | 'ring'} kind
+ * @param {Path} path
+ */
+function checkPositions(positions, kind, path) {
+  if (!Array.isArray(positions)) {
+    throw jsonError(path, `Expected an array of positions but found ${describe(positions)}`);
+  }
+  positions.forEach((position, index) => checkPosition(position, [...path, index]));
+  const minimum = kind === 'ring' ? 4 : 2;
+  if (positions.length < minimum) {
+    const name = kind === 'ring' ? 'A polygon ring' : 'A line';
+    throw jsonError(path, `${name} needs at least ${minimum} positions, got ${positions.length}`);
+  }
+  const first = positions[0];
+  const last = positions[positions.length - 1];
+  const closed = first.length === last.length
+    && first.every((/** @type {number} */ value, /** @type {number} */ index) => value === last[index]);
+  if (kind === 'ring' && !closed) {
+    throw jsonError(path, 'A polygon ring must end at the position where it starts');
+  }
+}
+
+/**
+ * @param {any} coordinates
+ * @param {number} depth
+ * @param {'point' | 'line' | 'ring'} kind
+ * @param {Path} path
+ */
+function checkCoordinates(coordinates, depth, kind, path) {
+  if (depth > 0) {
+    if (!Array.isArray(coordinates) || coordinates.length === 0) {
+      throw jsonError(path, `Expected a non-empty array of coordinates but found ${describe(coordinates)}`);
+    }
+    coordinates.forEach((member, index) => checkCoordinates(member, depth - 1, kind, [...path, index]));
+  } else if (kind === 'point') {
+    checkPosition(coordinates, path);
+  } else {
+    checkPositions(coordinates, kind, path);
+  }
+}
+
+/**
+ * @param {any} bbox
+ * @param {Path} path
+ */
+function checkBBox(bbox, path) {
+  const valid = Array.isArray(bbox) && (bbox.length === 4 || bbox.length === 6)
+    && bbox.every(number => typeof number === 'number' && Number.isFinite(number));
+  if (!valid) {
+    throw jsonError(path, 'A bounding box needs an array of 4 or 6 numbers');
+  }
+  bbox.forEach((/** @type {number} */ number, /** @type {number} */ index) => checkInteger(number, [...path, index]));
 }
 
 /**
@@ -88,6 +151,9 @@ function checkCoordinates(coordinates, depth, path) {
 function checkGeometry(value, path, nested = false) {
   if (!GEOMETRY_NAMES.has(value.type)) {
     throw jsonError([...path, 'type'], `Unknown geometry type ${JSON.stringify(value.type)}`);
+  }
+  if ('bbox' in value) {
+    checkBBox(value.bbox, [...path, 'bbox']);
   }
   if (value.type === 'GeometryCollection') {
     if (nested) {
@@ -105,8 +171,14 @@ function checkGeometry(value, path, nested = false) {
     });
     return;
   }
-  const depth = COORDINATE_DEPTH[/** @type {keyof typeof COORDINATE_DEPTH} */ (value.type)];
-  checkCoordinates(value.coordinates, depth, [...path, 'coordinates']);
+  const { depth, kind } = COORDINATES[value.type];
+  const coordinatesPath = [...path, 'coordinates'];
+  if (!Array.isArray(value.coordinates)) {
+    throw jsonError(coordinatesPath, `Expected an array of coordinates but found ${describe(value.coordinates)}`);
+  }
+  if (value.coordinates.length > 0) {
+    checkCoordinates(value.coordinates, depth, kind, coordinatesPath);
+  }
 }
 
 /**
@@ -154,13 +226,21 @@ function parseObject(value, path, depth, parse) {
     const args = value.args.map((/** @type {any} */ arg, /** @type {number} */ index) =>
       parse(arg, [...path, 'args', index], depth));
     try {
-      return at(createOperator(value.op, args), path);
+      const node = createOperator(value.op, args);
+      if (node instanceof CqlFunction && !isIdentifier(value.op)) {
+        throw new CqlError('invalid-name', `${JSON.stringify(value.op)} is neither an operator nor a valid function name`);
+      }
+      return at(node, path);
     } catch (error) {
       if (error instanceof CqlError) {
         throw jsonError(path, error.message);
       }
       throw error;
     }
+  }
+  if (GEOMETRY_NAMES.has(value.type)) {
+    checkGeometry(value, path);
+    return at(new CqlGeometry(value), path);
   }
   if ('property' in value) {
     if (typeof value.property !== 'string' || value.property === '') {
@@ -190,13 +270,8 @@ function parseObject(value, path, depth, parse) {
     return at(new CqlInterval(start, end), path);
   }
   if ('bbox' in value) {
-    const bbox = value.bbox;
-    const valid = Array.isArray(bbox) && (bbox.length === 4 || bbox.length === 6)
-      && bbox.every(number => typeof number === 'number' && Number.isFinite(number));
-    if (!valid) {
-      throw jsonError([...path, 'bbox'], 'A bounding box needs an array of 4 or 6 numbers');
-    }
-    return at(new CqlBBox(bbox), path);
+    checkBBox(value.bbox, [...path, 'bbox']);
+    return at(new CqlBBox(value.bbox), path);
   }
   if ('type' in value) {
     checkGeometry(value, path);
@@ -224,6 +299,7 @@ function parseNode(value, path, depth) {
       if (!Number.isFinite(value)) {
         throw jsonError(path, 'A number must be finite');
       }
+      checkInteger(value, path);
       return at(new CqlNumber(value), path);
     case 'object':
       if (Array.isArray(value)) {
@@ -234,6 +310,21 @@ function parseNode(value, path, depth) {
       }
   }
   throw jsonError(path, `Unexpected ${describe(value)}`);
+}
+
+/**
+ * Refuses integers that JSON.parse has rounded, where the runtime reports the text of a number.
+ *
+ * @param {string} key
+ * @param {any} value
+ * @param {{ source?: string }} [context]
+ * @returns {any}
+ */
+function checkLiteral(key, value, context) {
+  if (typeof value === 'number' && typeof context?.source === 'string' && isRounded(context.source, value)) {
+    throw new CqlError('syntax', `The integer ${context.source} is too large to be represented exactly`);
+  }
+  return value;
 }
 
 /**
@@ -248,10 +339,19 @@ export function parseJson(json, options = {}) {
   let value = json;
   if (typeof json === 'string') {
     try {
-      value = JSON.parse(json);
+      value = JSON.parse(json, checkLiteral);
     } catch (error) {
+      if (error instanceof CqlError) {
+        throw error;
+      }
       throw new CqlError('syntax', `The filter is not valid JSON: ${/** @type {Error} */ (error).message}`);
     }
   }
-  return parseNode(value, [], options.maxDepth ?? DEFAULT_MAX_DEPTH);
+  const maxDepth = options.maxDepth ?? DEFAULT_MAX_DEPTH;
+  const node = parseNode(value, [], maxDepth);
+  const deep = findTooDeep(node, maxDepth);
+  if (deep) {
+    throw jsonError(deep.path ?? [], 'The filter is nested too deeply');
+  }
+  return node;
 }
